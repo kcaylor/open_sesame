@@ -1,0 +1,159 @@
+# res_spec
+
+Research Specification Template - A template repository for PhD research workflows using speckit.
+
+## Quick Start: Environment Setup
+
+This repository includes comprehensive Python environment management tools designed for research reproducibility.
+
+### First-Time Setup
+
+```bash
+# Interactive setup with educational prompts
+./.specify/scripts/bash/env-init.sh
+
+# Or quick setup with pixi (recommended for geospatial research)
+./.specify/scripts/bash/env-init.sh --tool pixi --quiet
+
+# Or with conda
+./.specify/scripts/bash/env-init.sh --tool conda --quiet
+```
+
+### Daily Workflow
+
+```bash
+# Validate your environment
+./.specify/scripts/bash/env-validate.sh
+
+# After installing new packages, sync your spec files
+./.specify/scripts/bash/env-sync.sh
+
+# Document a package for your manuscript methods section
+./.specify/scripts/bash/env-sync.sh --package numpy
+```
+
+### Reproduce an Environment
+
+```bash
+# When cloning this repository or switching machines
+./.specify/scripts/bash/env-init.sh --from-config
+```
+
+## Environment Management Scripts
+
+| Script | Purpose | Key Options |
+|--------|---------|-------------|
+| `env-init.sh` | Initialize Python environment | `--tool`, `--from-config`, `--quiet` |
+| `env-sync.sh` | Sync dependencies with spec files | `--auto`, `--package`, `--json` |
+| `env-validate.sh` | Validate environment state | `--fix`, `--json`, `--quiet` |
+
+All scripts are located in `.specify/scripts/bash/`.
+
+## Documentation
+
+- **[Environment Guide](docs/environment-guide.md)** - Choosing between pixi, conda, and venv
+- **[Pixi Workflows](docs/pixi-workflows.md)** - Geospatial research workflows with pixi
+- **[Troubleshooting](docs/troubleshooting.md)** - Common issues and solutions
+- **[Air-Gapped Setup](docs/air-gapped-setup.md)** - Offline/secure environment setup
+
+## Project Structure
+
+```
+res_spec/
+├── .specify/                    # Speckit configuration
+│   ├── scripts/bash/            # Environment management scripts
+│   ├── memory/                  # Project constitution
+│   └── templates/               # Specification templates
+├── specs/                       # Feature specifications
+├── docs/                        # Documentation
+├── src/                         # Source code (when applicable)
+├── notebooks/                   # Jupyter notebooks
+├── tests/                       # Tests
+├── .env-config                  # Environment configuration
+├── pixi.toml                    # Pixi dependencies (if using pixi)
+├── environment.yml              # Conda dependencies (if using conda)
+└── requirements.txt             # Pip dependencies (if using venv)
+```
+
+## Research Workflow
+
+This template follows the [res_spec Constitution](.specify/memory/constitution.md) principles:
+
+1. **Research-First Development** - Features serve scientific research goals
+2. **Reproducibility & Transparency** - Explicit environment documentation
+3. **Documentation as Science Communication** - WHY before HOW
+4. **Incremental Implementation with Validation** - MVP + validated increments
+5. **Library & Method Integration** - Leverage established scientific libraries
+
+## Configuration Files
+
+### .env-config
+
+Central configuration tracking your environment setup:
+
+```ini
+[environment]
+tool = pixi
+python_version = 3.11
+env_name = res-spec
+
+[packages]
+numpy = 1.26.0
+
+[package_notes]
+numpy = "Used for numerical computations in hydrological modeling"
+```
+
+The `package_notes` section is designed to help document your methods section in manuscripts.
+
+## Using with Speckit
+
+This template integrates with [speckit](https://github.com/specify-dev/speckit) for feature specification:
+
+```bash
+# Create a new feature specification
+/speckit.specify "Add watershed delineation functionality"
+
+# Generate implementation plan
+/speckit.plan
+
+# Generate task list
+/speckit.tasks
+```
+
+## For Geospatial Research
+
+Pixi is recommended for geospatial research due to excellent handling of complex binary dependencies:
+
+```bash
+# Setup geospatial environment
+./.specify/scripts/bash/env-init.sh --tool pixi
+
+# Add geospatial packages
+pixi add geopandas rasterio xarray rioxarray shapely pyproj
+```
+
+See [Pixi Workflows](docs/pixi-workflows.md) for detailed geospatial guidance.
+
+## Contributing
+
+1. Follow the [Constitution](.specify/memory/constitution.md) principles
+2. Use speckit workflow for new features
+3. Document environment dependencies with `env-sync.sh --package`
+4. Validate environment before committing: `env-validate.sh`
+
+## License
+
+[Specify your license]
+
+## Citation
+
+If you use this template in your research, please cite:
+
+```
+@software{res_spec,
+  title = {res\_spec: Research Specification Template},
+  year = {2024},
+  url = {https://github.com/your-org/res-spec}
+}
+```

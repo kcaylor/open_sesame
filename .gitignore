@@ -1,0 +1,90 @@
+# Python Environment Management
+# Added by env-init.sh
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# Pixi environments
+.pixi/
+
+# Conda environments (when created in project directory)
+conda-env/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# IDE settings
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environment variables
+.env.local
+.env.*.local
+
+# Data files (uncomment as needed for your project)
+# data/raw/
+# data/processed/
+# *.csv
+# *.parquet
+# *.nc
+# *.tif
+
+# Log files
+*.log
+logs/
+
+# Test and coverage
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+.nox/
+
+# Build artifacts
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
