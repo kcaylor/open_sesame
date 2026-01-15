@@ -1,0 +1,12 @@
+[project]
+name = "ef_2026"
+version = "0.1.0"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64", "osx-64", "win-64"]
+
+[dependencies]
+python = "3.11.*"
+numpy = ">=1.24"
+pandas = ">=2.0"
+matplotlib = ">=3.7"
+jupyterlab = ">=4.0"
