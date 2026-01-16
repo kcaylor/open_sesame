@@ -1,0 +1,49 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Openness Classifier: Few-shot LLM Classification of Data/Code Availability"
+abstract: >-
+  A Python library for classifying the openness of data and code
+  availability statements in scholarly publications using few-shot
+  learning with large language models. Supports multiple LLM providers
+  (Claude, OpenAI, Ollama) and produces validation metrics suitable
+  for manuscript reporting.
+authors:
+  - family-names: "Caylor"
+    given-names: "Kelly"
+    orcid: "https://orcid.org/0000-0001-7295-0059"
+    affiliation: "University of California, Santa Barbara"
+    email: "kcaylor@ucsb.edu"
+version: "0.1.0"
+date-released: "2026-01-15"
+license: MIT
+repository-code: "https://github.com/kcaylor/open_sesame"
+url: "https://github.com/kcaylor/open_sesame"
+keywords:
+  - openness classification
+  - data availability
+  - code availability
+  - few-shot learning
+  - large language models
+  - research reproducibility
+  - FAIR principles
+  - bibliometrics
+  - systematic review
+references:
+  - type: article
+    authors:
+      - family-names: "Brown"
+        given-names: "Tom B."
+    title: "Language Models are Few-Shot Learners"
+    year: 2020
+    journal: "Advances in Neural Information Processing Systems"
+    volume: 33
+  - type: article
+    authors:
+      - family-names: "Wilkinson"
+        given-names: "Mark D."
+    title: "The FAIR Guiding Principles for scientific data management and stewardship"
+    year: 2016
+    journal: "Scientific Data"
+    volume: 3
+    doi: "10.1038/sdata.2016.18"

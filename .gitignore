@@ -88,3 +88,40 @@ htmlcov/
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+# Python environments
+
+# ===========================================
+# Openness Classifier Specific
+# ===========================================
+
+# API Keys and Secrets (CRITICAL - never commit)
+.env
+secrets.json
+credentials.json
+*.key
+
+# nbdev generated docs
+_docs/
+_proc/
+.quarto/
+
+# Classification logs (can be large)
+logs/*.jsonl
+logs/*.json
+
+# Model artifacts
+*.pkl
+*.pickle
+*.joblib
+models/*.pt
+models/*.pth
+
+# Generated figures
+figures/*.png
+figures/*.pdf
+figures/*.svg
+!figures/.gitkeep
+
+# Temporary data backups
+*.csv.bak
+data/*.bak

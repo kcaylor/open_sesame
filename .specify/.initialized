@@ -1,0 +1,6 @@
+project_name: ef-open-science
+research_domain: publications, FAIR research, open science
+environment_tool: pixi
+python_version: 3.11
+initialized_at: 2026-01-15T12:55:00-08:00
+template_version: 1.0.0
