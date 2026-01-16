@@ -71,7 +71,7 @@ class ClassificationMetrics:
             f"| Cohen's Kappa | {self.cohens_kappa:.3f} |",
             "",
             "| Class | Precision | Recall | F1 | Support |",
-            "|-------|-----------|--------|----|---------|\",
+            "|-------|-----------|--------|-----|---------|",
         ]
 
         for cls in ['open', 'mostly_open', 'mostly_closed', 'closed']:
