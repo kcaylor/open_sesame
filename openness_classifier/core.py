@@ -14,6 +14,11 @@ import hashlib
 import time
 import logging
 import os
+import warnings
+
+# Suppress Pydantic serialization warnings from litellm
+warnings.filterwarnings('ignore', category=UserWarning, module='pydantic.main')
+warnings.filterwarnings('ignore', message='.*PydanticSerializationUnexpectedValue.*')
 
 # %% auto 0
 __all__ = ['OpennessCategory', 'ClassificationType', 'LLMProviderType', 'BatchStatus', 'ClassificationError', 'LLMError',
