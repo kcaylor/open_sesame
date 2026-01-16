@@ -174,7 +174,7 @@ def _load_from_env() -> ClassifierConfig:
         provider=provider,
         model_name=model_name,
         temperature=float(os.getenv('LLM_TEMPERATURE', '0.1')),
-        max_tokens=int(os.getenv('LLM_MAX_TOKENS', '500')),
+        max_tokens=int(os.getenv('LLM_MAX_TOKENS', '750')),  # Increased for refined taxonomy reasoning (FR-008)
         top_p=float(os.getenv('LLM_TOP_P', '0.95')),
         api_endpoint=os.getenv('OLLAMA_BASE_URL') if provider == LLMProviderType.OLLAMA else None,
         api_key_hash=LLMConfiguration.hash_api_key(api_key) if api_key else None,
@@ -220,7 +220,7 @@ def create_example_config(path: str | Path = 'example_config.json') -> None:
             provider=LLMProviderType.CLAUDE,
             model_name='claude-3-5-sonnet-20241022',
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=750,  # Increased for refined taxonomy reasoning (FR-008)
             top_p=0.95,
             api_key_hash='<hash_of_your_api_key>',
         ),

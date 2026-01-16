@@ -22,8 +22,8 @@ warnings.filterwarnings('ignore', message='.*PydanticSerializationUnexpectedValu
 
 # %% auto 0
 __all__ = ['OpennessCategory', 'ClassificationType', 'LLMProviderType', 'BatchStatus', 'ClassificationError', 'LLMError',
-           'ConfigurationError', 'DataError', 'ValidationError', 'LLMConfiguration', 'Classification', 'LLMProvider',
-           'ClassificationLogger']
+           'ConfigurationError', 'DataError', 'ValidationError', 'LLMConfiguration', 'Classification',
+           'ClassificationFailure', 'LLMProvider', 'ClassificationLogger']
 
 # %% ../nbs/00_core.ipynb 4
 class OpennessCategory(str, Enum):
@@ -132,7 +132,7 @@ class LLMConfiguration:
         provider: LLM provider type (claude, openai, ollama)
         model_name: Model identifier (e.g., 'claude-3-5-sonnet-20241022')
         temperature: Sampling temperature (default: 0.1 for consistency)
-        max_tokens: Maximum response tokens (default: 500)
+        max_tokens: Maximum response tokens (default: 750 for refined taxonomy reasoning)
         top_p: Nucleus sampling parameter (default: 0.95)
         api_endpoint: Optional custom API endpoint (for Ollama)
         api_key_hash: SHA-256 hash of API key for audit trail (never store key itself)
@@ -140,7 +140,7 @@ class LLMConfiguration:
     provider: LLMProviderType
     model_name: str
     temperature: float = 0.1
-    max_tokens: int = 500
+    max_tokens: int = 750  # Increased for refined taxonomy reasoning (FR-008)
     top_p: float = 0.95
     api_endpoint: Optional[str] = None
     api_key_hash: Optional[str] = None
@@ -222,13 +222,112 @@ class Classification:
             'few_shot_example_ids': self.few_shot_example_ids,
         }
 
+
+# %% ../nbs/00_core.ipynb 15
+@dataclass
+class ClassificationFailure:
+    """Track failed classification attempts for FR-010 (retry and failure handling).
+
+    Enables graceful degradation and audit trail for unclassified publications.
+    Created when LLM classification fails after exhausting retry attempts.
+
+    Attributes:
+        publication_id: Unique identifier (DOI or equivalent)
+        statement_type: Whether this was data or code classification
+        error_type: Error category (timeout, rate_limit, malformed_response, etc.)
+        retry_count: Number of retry attempts (max 3 per FR-010)
+        final_status: Always "unclassified" after failure
+        error_reason: Detailed error message for debugging
+        timestamp: When final failure occurred (UTC)
+        original_statement: The statement that failed classification (truncated)
+    """
+    publication_id: str
+    statement_type: ClassificationType
+    error_type: str
+    retry_count: int
+    final_status: str = "unclassified"
+    error_reason: str = ""
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    original_statement: Optional[str] = None
+
+    def __post_init__(self):
+        """Validate retry count and final_status."""
+        if self.retry_count > 3:
+            logging.warning(f"Retry count {self.retry_count} exceeds FR-010 limit of 3")
+        if self.final_status != "unclassified":
+            raise ValueError(f"final_status must be 'unclassified', got {self.final_status}")
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON logging."""
+        return {
+            'publication_id': self.publication_id,
+            'statement_type': self.statement_type.value,
+            'error_type': self.error_type,
+            'retry_count': self.retry_count,
+            'final_status': self.final_status,
+            'error_reason': self.error_reason,
+            'timestamp': self.timestamp.isoformat(),
+            'original_statement': self.original_statement[:500] if self.original_statement else None,
+        }
+
+    @classmethod
+    def from_llm_error(
+        cls,
+        publication_id: str,
+        statement_type: ClassificationType,
+        error: LLMError,
+        retry_count: int = 3,
+        original_statement: Optional[str] = None
+    ) -> 'ClassificationFailure':
+        """Create ClassificationFailure from an LLMError exception.
+
+        Args:
+            publication_id: Unique identifier for the publication
+            statement_type: DATA or CODE
+            error: The LLMError that caused the failure
+            retry_count: Number of retries attempted
+            original_statement: The statement that failed classification
+
+        Returns:
+            ClassificationFailure instance
+        """
+        # Determine error type from error message
+        error_str = str(error).lower()
+        if 'timeout' in error_str:
+            error_type = 'timeout'
+        elif 'rate limit' in error_str or '429' in error_str:
+            error_type = 'rate_limit'
+        elif any(code in error_str for code in ['500', '502', '503', '504']):
+            error_type = 'server_error'
+        elif 'malformed' in error_str or 'parse' in error_str:
+            error_type = 'malformed_response'
+        else:
+            error_type = 'api_error'
+
+        return cls(
+            publication_id=publication_id,
+            statement_type=statement_type,
+            error_type=error_type,
+            retry_count=retry_count,
+            error_reason=str(error),
+            original_statement=original_statement
+        )
+
+
 # %% ../nbs/00_core.ipynb 16
 class LLMProvider:
     """Unified LLM provider interface using LiteLLM.
-    
+
     Supports Claude, OpenAI, and Ollama with consistent interface.
-    Includes retry logic with exponential backoff for transient errors.
-    
+    Includes retry logic with exponential backoff and full jitter for transient errors.
+
+    Retry Policy (per research.md FR-010):
+    - max_retries: 3 (4 total attempts)
+    - initial_delay: 1.0 seconds
+    - exponential_base: 2.0
+    - jitter: full (randomize delay between 0 and calculated backoff)
+    - retryable_status_codes: [408, 429, 500, 502, 503, 504]
+
     Example:
         >>> config = LLMConfiguration(
         ...     provider=LLMProviderType.CLAUDE,
@@ -237,11 +336,14 @@ class LLMProvider:
         >>> provider = LLMProvider(config)
         >>> response = provider.complete("Classify this statement...")
     """
-    
+
+    # Retryable HTTP status codes per research.md
+    RETRYABLE_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+
     def __init__(self, config: LLMConfiguration):
         self.config = config
         self._setup_provider()
-    
+
     def _setup_provider(self):
         """Configure the LLM provider based on config."""
         # LiteLLM uses model prefixes to route to providers
@@ -258,31 +360,61 @@ class LLMProvider:
                 os.environ['OLLAMA_API_BASE'] = self.config.api_endpoint
         else:
             raise ConfigurationError(f"Unknown provider: {self.config.provider}")
-    
+
+    def _is_retryable_error(self, error: Exception) -> bool:
+        """Check if an error is retryable based on status code or message."""
+        error_str = str(error).lower()
+
+        # Check for status codes in error message
+        for code in self.RETRYABLE_STATUS_CODES:
+            if str(code) in error_str:
+                return True
+
+        # Check for common retryable error patterns
+        retryable_patterns = [
+            'rate limit', 'timeout', 'overloaded',
+            'service unavailable', 'connection error',
+            'network error', 'temporarily unavailable'
+        ]
+        return any(pattern in error_str for pattern in retryable_patterns)
+
+    def _calculate_backoff_with_jitter(self, attempt: int, initial_delay: float) -> float:
+        """Calculate exponential backoff delay with full jitter.
+
+        Full jitter: delay = random(0, min(max_delay, initial_delay * 2^attempt))
+        This helps prevent thundering herd problem in batch processing.
+        """
+        import random
+        max_delay = 60.0  # Cap maximum delay at 60 seconds
+        calculated_delay = min(max_delay, initial_delay * (2 ** attempt))
+        # Full jitter: random value between 0 and calculated delay
+        return random.uniform(0, calculated_delay)
+
     def complete(
-        self, 
+        self,
         prompt: str,
         max_retries: int = 3,
         retry_delay: float = 1.0
     ) -> str:
         """Generate completion for the given prompt.
-        
+
+        Uses exponential backoff with full jitter for retry logic.
+
         Args:
             prompt: The prompt to complete
-            max_retries: Maximum number of retry attempts
-            retry_delay: Initial delay between retries (doubles each retry)
-            
+            max_retries: Maximum number of retry attempts (default: 3 per FR-010)
+            retry_delay: Initial delay between retries in seconds (default: 1.0)
+
         Returns:
             The model's response text
-            
+
         Raises:
             LLMError: If all retries fail
         """
         import litellm
-        
+
         last_error = None
-        delay = retry_delay
-        
+
         for attempt in range(max_retries + 1):
             try:
                 response = litellm.completion(
@@ -295,24 +427,20 @@ class LLMProvider:
                 return response.choices[0].message.content
             except Exception as e:
                 last_error = e
-                error_str = str(e).lower()
-                
+
                 # Check if error is retryable
-                retryable = any(x in error_str for x in [
-                    'rate limit', 'timeout', 'overloaded', 
-                    'service unavailable', '529', '503', '504'
-                ])
-                
-                if retryable and attempt < max_retries:
+                is_retryable = self._is_retryable_error(e)
+
+                if is_retryable and attempt < max_retries:
+                    delay = self._calculate_backoff_with_jitter(attempt, retry_delay)
                     logging.warning(
                         f"LLM request failed (attempt {attempt + 1}/{max_retries + 1}): {e}. "
-                        f"Retrying in {delay:.1f}s..."
+                        f"Retrying in {delay:.2f}s with jittered backoff..."
                     )
                     time.sleep(delay)
-                    delay *= 2  # Exponential backoff
                 else:
                     break
-        
+
         raise LLMError(
             f"LLM request failed after {max_retries + 1} attempts: {last_error}",
             provider=self.config.provider.value,

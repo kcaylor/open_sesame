@@ -30,12 +30,15 @@ from openness_classifier.prompts import (
     select_knn_examples,
     build_few_shot_prompt,
     parse_classification_response,
+    extract_completeness_attributes,
+    has_substantial_barrier,
     SYSTEM_PROMPT,
+    SUBSTANTIAL_BARRIERS,
 )
 
 # %% auto 0
 __all__ = ['OpennessClassifier', 'get_classifier', 'classify_statement', 'classify_publication', 'identify_low_confidence',
-           'suggest_training_examples']
+           'suggest_training_examples', 'validate_classification_precedence']
 
 # %% ../nbs/04_classifier.ipynb 4
 class OpennessClassifier:
@@ -101,22 +104,28 @@ class OpennessClassifier:
         statement_type: ClassificationType,
         return_reasoning: bool = True,
         publication_id: Optional[str] = None,
+        enforce_precedence: bool = True,
     ) -> Classification:
         """Classify a single availability statement.
-        
+
+        Implements the refined taxonomy with 5-step CoT reasoning and
+        hard precedence rule enforcement (FR-004).
+
         Args:
             statement: The availability statement text
             statement_type: DATA or CODE
             return_reasoning: Include chain-of-thought reasoning
             publication_id: Optional ID for logging
-            
+            enforce_precedence: If True, apply FR-004 hard precedence rule
+                               post-classification to validate/correct
+
         Returns:
             Classification result with category, confidence, and reasoning
         """
         # Select appropriate training examples
-        examples = (self.data_examples if statement_type == ClassificationType.DATA 
+        examples = (self.data_examples if statement_type == ClassificationType.DATA
                    else self.code_examples)
-        
+
         # Select kNN examples
         selected = select_knn_examples(
             statement=statement,
@@ -124,7 +133,7 @@ class OpennessClassifier:
             embedding_model=self.embedding_model,
             k=self.config.few_shot_k,
         )
-        
+
         # Build prompt
         prompt = build_few_shot_prompt(
             statement=statement,
@@ -132,16 +141,37 @@ class OpennessClassifier:
             examples=selected,
             include_reasoning=return_reasoning,
         )
-        
+
         # Prepend system prompt
         full_prompt = f"{SYSTEM_PROMPT}\n\n{prompt}"
-        
+
         # Call LLM
         response = self.llm_provider.complete(full_prompt)
-        
+
         # Parse response
         category, confidence, reasoning = parse_classification_response(response)
-        
+
+        # Apply FR-004 hard precedence rule if enabled (T014)
+        original_category = category
+        if enforce_precedence:
+            category, precedence_applied = validate_classification_precedence(
+                category=category,
+                statement=statement,
+                reasoning=reasoning or "",
+            )
+            if precedence_applied:
+                logging.info(
+                    f"FR-004 precedence rule applied: {original_category.value} -> {category.value} "
+                    f"(substantial barrier detected in statement)"
+                )
+                # Adjust reasoning to note the precedence application
+                if reasoning:
+                    reasoning = (
+                        f"{reasoning}\n\n[VALIDATION NOTE: FR-004 precedence rule applied - "
+                        f"substantial access barrier detected, classification adjusted from "
+                        f"{original_category.value} to {category.value}]"
+                    )
+
         # Create classification result
         classification = Classification(
             category=category,
@@ -151,15 +181,23 @@ class OpennessClassifier:
             model_config=self.config.llm,
             few_shot_example_ids=[ex.id for ex in selected],
         )
-        
-        # Log classification
+
+        # Log classification with extra metadata
         if self.logger and publication_id:
+            extra_metadata = None
+            if enforce_precedence and reasoning:
+                # Extract completeness attributes for audit trail (SC-004)
+                extra_metadata = extract_completeness_attributes(reasoning, statement_type)
+                extra_metadata['precedence_applied'] = (original_category != category)
+                extra_metadata['original_category'] = original_category.value if original_category != category else None
+
             self.logger.log_classification(
                 publication_id=publication_id,
                 classification=classification,
                 statement_text=statement,
+                extra=extra_metadata,
             )
-        
+
         return classification
     
     def classify_publication(
@@ -310,15 +348,15 @@ def suggest_training_examples(
     max_suggestions: int = 10
 ) -> List[Tuple[str, Classification]]:
     """Suggest statements that would benefit from manual coding.
-    
+
     Returns low-confidence classifications that should be manually
     reviewed and potentially added to training data.
-    
+
     Args:
         classifications: List of (statement_text, classification) tuples
         threshold: Confidence threshold
         max_suggestions: Maximum suggestions to return
-        
+
     Returns:
         List of (statement, classification) tuples needing review
     """
@@ -326,8 +364,80 @@ def suggest_training_examples(
         (stmt, cls) for stmt, cls in classifications
         if cls.confidence_score < threshold
     ]
-    
+
     # Sort by confidence (lowest first)
     low_conf.sort(key=lambda x: x[1].confidence_score)
-    
+
     return low_conf[:max_suggestions]
+
+
+# %% ../nbs/04_classifier.ipynb 10
+def validate_classification_precedence(
+    category: OpennessCategory,
+    statement: str,
+    reasoning: str,
+) -> Tuple[OpennessCategory, bool]:
+    """Apply FR-004 hard precedence rule for substantial access barriers.
+
+    CRITICAL RULE: If substantial access barriers exist (data use agreements,
+    proprietary terms, confidentiality restrictions), classification MUST be
+    mostly_closed or closed, REGARDLESS of completeness or repository quality.
+
+    This function validates and potentially corrects LLM classifications to
+    ensure the hard precedence rule is always enforced.
+
+    Args:
+        category: The LLM's initial classification
+        statement: The original availability statement
+        reasoning: The LLM's reasoning text
+
+    Returns:
+        Tuple of (corrected_category, precedence_was_applied)
+        - corrected_category: The validated/corrected classification
+        - precedence_was_applied: True if a correction was made
+
+    Examples:
+        >>> # Statement mentions DUA but LLM classified as mostly_open
+        >>> category, applied = validate_classification_precedence(
+        ...     OpennessCategory.MOSTLY_OPEN,
+        ...     "Data available via data use agreement from ICPSR",
+        ...     "High completeness, all data types available..."
+        ... )
+        >>> category == OpennessCategory.MOSTLY_CLOSED and applied == True
+        True
+
+        >>> # Statement has no barriers, mostly_open classification preserved
+        >>> category, applied = validate_classification_precedence(
+        ...     OpennessCategory.MOSTLY_OPEN,
+        ...     "All data available on Zenodo with free registration",
+        ...     "High completeness with minor registration barrier..."
+        ... )
+        >>> category == OpennessCategory.MOSTLY_OPEN and applied == False
+        True
+    """
+    # Check if substantial barrier exists in statement
+    statement_has_barrier = has_substantial_barrier(statement)
+
+    # "Upon request" or "contact author" is always CLOSED (not just mostly_closed)
+    statement_lower = statement.lower()
+    is_upon_request = any(phrase in statement_lower for phrase in [
+        'upon request', 'upon reasonable request', 'contact the author',
+        'contact author', 'available from the author', 'request from'
+    ])
+
+    # Determine if correction needed
+    precedence_applied = False
+    corrected_category = category
+
+    if is_upon_request:
+        # "Upon request" ALWAYS means CLOSED
+        if category != OpennessCategory.CLOSED:
+            corrected_category = OpennessCategory.CLOSED
+            precedence_applied = True
+    elif statement_has_barrier:
+        # Substantial barrier (but not "upon request") -> at most mostly_closed
+        if category in [OpennessCategory.OPEN, OpennessCategory.MOSTLY_OPEN]:
+            corrected_category = OpennessCategory.MOSTLY_CLOSED
+            precedence_applied = True
+
+    return corrected_category, precedence_applied

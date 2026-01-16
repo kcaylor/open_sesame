@@ -11,8 +11,10 @@ from .core import OpennessCategory, ClassificationType
 from .data import TrainingExample, EmbeddingModel
 
 # %% auto 0
-__all__ = ['SYSTEM_PROMPT', 'DATA_CLASSIFICATION_TEMPLATE', 'CODE_CLASSIFICATION_TEMPLATE', 'select_knn_examples',
-           'build_few_shot_prompt', 'parse_classification_response']
+__all__ = ['SYSTEM_PROMPT', 'DATA_CLASSIFICATION_TEMPLATE', 'CODE_CLASSIFICATION_TEMPLATE',
+           'MOSTLY_OPEN_DATA_COMPLETENESS', 'MOSTLY_OPEN_CODE_COMPLETENESS', 'SUBSTANTIAL_BARRIERS',
+           'select_knn_examples', 'build_few_shot_prompt', 'parse_classification_response',
+           'extract_completeness_attributes', 'has_substantial_barrier']
 
 # %% ../nbs/03_prompts.ipynb 4
 def select_knn_examples(
@@ -100,7 +102,44 @@ def _select_diverse_examples(
     return selected
 
 # %% ../nbs/03_prompts.ipynb 6
-SYSTEM_PROMPT = """You are an expert research analyst specializing in evaluating data and code availability statements in scholarly publications. Your task is to classify the openness of availability statements using a 4-category taxonomy.
+# Completeness indicators for mostly_open classification (FR-002, FR-003, refined per research.md)
+MOSTLY_OPEN_DATA_COMPLETENESS = [
+    "All",
+    "Raw; Results; Source Data",
+    "Raw; Results",
+    "Raw",
+    "Raw; Source Data",
+]
+
+MOSTLY_OPEN_CODE_COMPLETENESS = [
+    "All",
+    "Model",
+    "Models",
+    "Download; Process; Analysis; Figures",
+    "Processing; Generate Results",
+    "Processing; Results",
+    "Models; Results",
+    "Models; Analysis",
+    "Analysis; Figures",
+    "Model; Figures",
+    "Results; Figures",
+    "Generate Results; Figures",
+]
+
+# Substantial access barriers that force mostly_closed (FR-004 hard precedence rule)
+SUBSTANTIAL_BARRIERS = [
+    "data use agreement",
+    "confidentiality",
+    "proprietary",
+    "upon request",
+    "contact author",
+    "restricted access",
+    "DUA",
+    "confidential",
+]
+
+
+SYSTEM_PROMPT = """You are an expert research analyst specializing in evaluating data and code availability statements in scholarly publications. Your task is to classify the openness of availability statements using a refined 4-category taxonomy.
 
 Classification Categories (from most open to least open):
 
@@ -110,21 +149,26 @@ Classification Categories (from most open to least open):
    - Open license (CC-BY, MIT, etc.)
 
 2. **mostly_open**: Largely accessible with minor restrictions
-   - Public repository but requires free registration
-   - Institutional access (freely available to affiliated researchers)
-   - Minor conditions (e.g., cite the source)
+   - HIGH COMPLETENESS: Most or all data/code types available
+     * Data: All, Raw, Raw; Results, Raw; Results; Source Data
+     * Code: All, Models, Download; Process; Analysis; Figures, or similar comprehensive combinations
+   - MINOR BARRIERS ONLY: Free registration, institutional access, citation requirement
+   - Can use non-persistent repository (GitHub) IF comprehensive materials provided
 
 3. **mostly_closed**: Largely restricted with limited access
-   - Data use agreements required
-   - Partial availability (some data/code withheld)
-   - Significant restrictions on use or redistribution
-   - Available only through specific collaborations
+   - LOW/PARTIAL COMPLETENESS: Only some data/code types available (e.g., Results only, Processing scripts only)
+   - SUBSTANTIAL BARRIERS: Data use agreements, confidentiality restrictions, proprietary terms
+   - Available only through specific collaborations or agreements
+   - Note: Substantial barriers ALWAYS force mostly_closed regardless of completeness
 
 4. **closed**: Not accessible
    - "Available upon request" (regardless of how polite)
    - Confidential, proprietary, or restricted
    - No statement provided
    - Contact author for access
+
+CRITICAL RULE (HARD PRECEDENCE - FR-004):
+If substantial access barriers exist (data use agreements, proprietary terms, confidentiality restrictions, "available upon request"), the classification MUST be mostly_closed or closed, REGARDLESS of completeness or repository quality. This rule has absolute precedence.
 
 IMPORTANT: "Available upon request" or "contact the authors" is ALWAYS classified as **closed**."""
 
@@ -137,15 +181,35 @@ Now classify this statement:
 
 Statement: {statement}
 
-Think step-by-step:
-1. What repository or location is mentioned (if any)?
-2. What access restrictions are described?
-3. Is there any "upon request" or "contact author" language?
+Think step-by-step through this 5-step reasoning process:
+
+1. **Identify data types mentioned**: What types of data are available?
+   - Look for: Raw data, Results, Source Data, Processed data, All data
+   - HIGH completeness indicators: All, Raw; Results; Source Data, Raw; Results, Raw
+
+2. **Assess completeness**: Does the statement indicate all necessary materials for reproduction or only partial materials?
+   - All/most data types = HIGH completeness → favors mostly_open
+   - Only some data types (e.g., "Results only") = LOW completeness → favors mostly_closed
+
+3. **Identify access barriers**: What restrictions are mentioned?
+   - MINOR barriers (allow mostly_open): Free registration, institutional access, citation required
+   - SUBSTANTIAL barriers (force mostly_closed): Data use agreement, confidentiality, proprietary, "upon request"
+
+4. **Determine repository type** (if mentioned):
+   - PERSISTENT (Zenodo, Figshare, Dryad, DOI): Adds confidence to classification
+   - NON-PERSISTENT (GitHub, personal website): Acceptable IF high completeness
+
+5. **Apply classification rules** (in this order):
+   - FIRST CHECK: Substantial barrier present? → mostly_closed or closed (STOP, do not consider other factors)
+   - "Upon request" or "contact author"? → closed
+   - No substantial barrier + HIGH completeness → mostly_open
+   - No substantial barrier + LOW completeness → mostly_closed
+   - No barriers + fully public → open
 
 Based on your analysis, provide:
 - Classification: [open/mostly_open/mostly_closed/closed]
 - Confidence: [0.0-1.0]
-- Reasoning: [brief explanation]"""
+- Reasoning: [Your step-by-step analysis mentioning specific data types, barriers, and repository]"""
 
 
 CODE_CLASSIFICATION_TEMPLATE = """Classify the following CODE availability statement.
@@ -156,15 +220,35 @@ Now classify this statement:
 
 Statement: {statement}
 
-Think step-by-step:
-1. What repository or platform is mentioned (if any)?
-2. Is the code publicly accessible?
-3. Are there any restrictions on access or use?
+Think step-by-step through this 5-step reasoning process:
+
+1. **Identify code types mentioned**: What types of code are available?
+   - Look for: Download scripts, Processing scripts, Analysis code, Figure generation, Models, All code
+   - HIGH completeness indicators: All, Models, Download; Process; Analysis; Figures, Processing; Generate Results
+
+2. **Assess completeness**: Does the statement indicate all necessary code for reproduction or only partial code?
+   - All/most code types = HIGH completeness → favors mostly_open
+   - Only some code types (e.g., "Processing scripts only") = LOW completeness → favors mostly_closed
+
+3. **Identify access barriers**: What restrictions are mentioned?
+   - MINOR barriers (allow mostly_open): Free registration, institutional access, citation required
+   - SUBSTANTIAL barriers (force mostly_closed): Proprietary code, confidential algorithms, "upon request"
+
+4. **Determine repository type** (if mentioned):
+   - PERSISTENT (Zenodo, Figshare with DOI): Adds confidence to classification
+   - NON-PERSISTENT (GitHub, GitLab): Acceptable IF comprehensive code provided (all types)
+
+5. **Apply classification rules** (in this order):
+   - FIRST CHECK: Substantial barrier present? → mostly_closed or closed (STOP, do not consider other factors)
+   - "Upon request" or "contact author"? → closed
+   - No substantial barrier + HIGH completeness → mostly_open
+   - No substantial barrier + LOW completeness → mostly_closed
+   - No barriers + fully public → open
 
 Based on your analysis, provide:
 - Classification: [open/mostly_open/mostly_closed/closed]
 - Confidence: [0.0-1.0]
-- Reasoning: [brief explanation]"""
+- Reasoning: [Your step-by-step analysis mentioning specific code types, barriers, and repository]"""
 
 # %% ../nbs/03_prompts.ipynb 8
 def build_few_shot_prompt(
@@ -210,22 +294,118 @@ def build_few_shot_prompt(
     )
 
 # %% ../nbs/03_prompts.ipynb 9
+def has_substantial_barrier(text: str) -> bool:
+    """Check if text contains any substantial access barrier (FR-004).
+
+    Args:
+        text: Statement or reasoning text to check
+
+    Returns:
+        True if substantial barrier found, False otherwise
+    """
+    text_lower = text.lower()
+    return any(barrier.lower() in text_lower for barrier in SUBSTANTIAL_BARRIERS)
+
+
+def extract_completeness_attributes(
+    reasoning: str,
+    statement_type: ClassificationType
+) -> dict:
+    """Extract completeness attributes from LLM reasoning (FR-007, SC-004).
+
+    Parses the 5-step reasoning to identify data/code types, barriers,
+    and repository type. Used for validation and audit.
+
+    Args:
+        reasoning: The LLM's reasoning text
+        statement_type: DATA or CODE
+
+    Returns:
+        Dictionary with extracted attributes:
+        - types_mentioned: List of data/code types identified
+        - completeness_level: 'high' or 'low' based on types
+        - barriers_found: List of barriers mentioned
+        - substantial_barrier: Boolean (FR-004)
+        - repository_type: 'persistent', 'non_persistent', or 'unknown'
+        - reasoning_quality: Score 0-1 based on attribute coverage
+    """
+    import re
+    reasoning_lower = reasoning.lower()
+
+    # Extract data/code types mentioned
+    types_mentioned = []
+    if statement_type == ClassificationType.DATA:
+        type_patterns = ['raw', 'results', 'source data', 'processed', 'all data', 'raw data']
+    else:
+        type_patterns = ['download', 'processing', 'analysis', 'figures', 'models?', 'all code']
+
+    for pattern in type_patterns:
+        if re.search(pattern, reasoning_lower):
+            types_mentioned.append(pattern.replace('?', ''))
+
+    # Determine completeness level
+    high_completeness_keywords = ['high completeness', 'comprehensive', 'all', 'complete', 'most']
+    low_completeness_keywords = ['low completeness', 'partial', 'only', 'limited', 'some']
+
+    completeness_level = 'unknown'
+    if any(kw in reasoning_lower for kw in high_completeness_keywords):
+        completeness_level = 'high'
+    elif any(kw in reasoning_lower for kw in low_completeness_keywords):
+        completeness_level = 'low'
+
+    # Extract barriers found
+    barriers_found = [b for b in SUBSTANTIAL_BARRIERS if b.lower() in reasoning_lower]
+
+    # Check for substantial barrier
+    substantial_barrier = has_substantial_barrier(reasoning)
+
+    # Determine repository type
+    persistent_repos = ['zenodo', 'figshare', 'dryad', 'doi:']
+    non_persistent_repos = ['github', 'gitlab', 'personal website', 'supplementary']
+
+    repository_type = 'unknown'
+    if any(repo in reasoning_lower for repo in persistent_repos):
+        repository_type = 'persistent'
+    elif any(repo in reasoning_lower for repo in non_persistent_repos):
+        repository_type = 'non_persistent'
+
+    # Calculate reasoning quality score (SC-004: 90% should mention completeness)
+    quality_checks = [
+        len(types_mentioned) > 0,  # Mentions specific types
+        completeness_level != 'unknown',  # Assesses completeness
+        repository_type != 'unknown' or substantial_barrier,  # Mentions repo or barrier
+        'step' in reasoning_lower or any(str(i) in reasoning for i in range(1, 6)),  # Shows reasoning steps
+    ]
+    reasoning_quality = sum(quality_checks) / len(quality_checks)
+
+    return {
+        'types_mentioned': types_mentioned,
+        'completeness_level': completeness_level,
+        'barriers_found': barriers_found,
+        'substantial_barrier': substantial_barrier,
+        'repository_type': repository_type,
+        'reasoning_quality': reasoning_quality,
+    }
+
+
 def parse_classification_response(response: str) -> tuple:
     """Parse LLM response to extract classification, confidence, and reasoning.
-    
+
+    Enhanced to extract completeness attributes from 5-step reasoning (T007).
+
     Args:
         response: Raw LLM response text
-        
+
     Returns:
         Tuple of (OpennessCategory, confidence_score, reasoning)
     """
     import re
-    
+
     # Default values
     category = None
     confidence = 0.8
     reasoning = response
-    
+
     # Try to extract classification
     class_match = re.search(
         r'Classification:\s*(open|mostly_open|mostly_closed|closed)',
@@ -240,7 +420,7 @@ def parse_classification_response(response: str) -> tuple:
             if cat in response.lower():
                 category = OpennessCategory.from_string(cat)
                 break
-    
+
     # Try to extract confidence
     conf_match = re.search(r'Confidence:\s*([0-9.]+)', response, re.IGNORECASE)
     if conf_match:
@@ -249,17 +429,17 @@ def parse_classification_response(response: str) -> tuple:
             confidence = max(0.0, min(1.0, confidence))  # Clamp to [0, 1]
         except ValueError:
             pass
-    
+
     # Try to extract reasoning
-    reason_match = re.search(r'Reasoning:\s*(.+?)(?=$|Classification:|Confidence:)', 
+    reason_match = re.search(r'Reasoning:\s*(.+?)(?=$|Classification:|Confidence:)',
                             response, re.IGNORECASE | re.DOTALL)
     if reason_match:
         reasoning = reason_match.group(1).strip()
-    
+
     if category is None:
         # Default to closed if we can't parse
         category = OpennessCategory.CLOSED
         confidence = 0.3  # Low confidence for unparseable response
         reasoning = f"Could not parse response: {response[:200]}..."
-    
+
     return category, confidence, reasoning
