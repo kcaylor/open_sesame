@@ -1,0 +1,398 @@
+# Classification Prompt Contract
+# OpenAPI-style schema for enhanced classification prompts with completeness reasoning
+
+openapi: 3.0.0
+info:
+  title: Refined Classification Prompt API
+  version: 1.0.0
+  description: |
+    Enhanced classification prompt contract for the refined openness taxonomy.
+    This contract defines the input/output schema for LLM-based classification
+    with explicit reasoning about data/code completeness attributes, access barriers,
+    and repository persistence.
+
+schemas:
+  # ============================================================================
+  # REQUEST SCHEMA
+  # ============================================================================
+
+  PromptRequest:
+    type: object
+    description: Input to the classification prompt
+    required:
+      - statement
+      - statement_type
+      - few_shot_examples
+    properties:
+      statement:
+        type: string
+        description: The data or code availability statement to classify
+        example: "Raw data files are available at https://zenodo.org/record/12345 with free registration required."
+
+      statement_type:
+        type: string
+        enum: [data, code]
+        description: Whether this is a data or code availability statement
+
+      few_shot_examples:
+        type: array
+        description: k=5 semantically similar training examples selected via kNN
+        minItems: 0
+        maxItems: 5
+        items:
+          $ref: '#/schemas/TrainingExample'
+
+  TrainingExample:
+    type: object
+    description: A training example with ground truth classification
+    required:
+      - statement_text
+      - ground_truth
+    properties:
+      statement_text:
+        type: string
+        description: The example statement text
+
+      ground_truth:
+        type: string
+        enum: [open, mostly_open, mostly_closed, closed]
+        description: Human-coded classification for this example
+
+      data_included:
+        type: string
+        nullable: true
+        description: |
+          Data completeness attributes from training data (for validation).
+          Examples: "All", "Raw; Results; Source Data", "Results only"
+
+      code_included:
+        type: string
+        nullable: true
+        description: |
+          Code completeness attributes from training data (for validation).
+          Examples: "All", "Processing; Analysis", "None"
+
+  # ============================================================================
+  # RESPONSE SCHEMA
+  # ============================================================================
+
+  PromptResponse:
+    type: object
+    description: LLM response to classification prompt with reasoning
+    required:
+      - category
+      - confidence
+      - reasoning
+    properties:
+      category:
+        type: string
+        enum: [open, mostly_open, mostly_closed, closed]
+        description: The classified openness category
+
+      confidence:
+        type: number
+        format: float
+        minimum: 0.0
+        maximum: 1.0
+        description: Model confidence in classification (0.0-1.0)
+
+      reasoning:
+        type: string
+        description: |
+          Chain-of-thought reasoning explaining the classification decision.
+          For mostly_open/mostly_closed classifications, MUST explicitly mention:
+          - What data/code types are included (completeness attributes)
+          - What access barriers exist (minor vs substantial)
+          - Repository type if relevant (persistent vs non-persistent)
+        example: |
+          1. Data types mentioned: Raw data, Results, Source Data (high completeness)
+          2. Access barrier: Free registration required (minor barrier)
+          3. Repository: Zenodo (persistent repository with DOI)
+          4. Decision: High completeness + minor barrier → mostly_open
+
+      completeness_attributes_mentioned:
+        type: array
+        items:
+          type: string
+        description: |
+          Completeness attributes explicitly mentioned in reasoning.
+          Extracted for validation that reasoning addresses completeness (FR-008, SC-004).
+        example: ["Raw", "Results", "Source Data", "All"]
+
+      access_barriers_mentioned:
+        type: array
+        items:
+          type: string
+        description: |
+          Access barriers explicitly mentioned in reasoning.
+          Used to validate hard precedence rule enforcement (FR-004).
+        example: ["registration", "institutional access"]
+
+      repository_type:
+        type: string
+        enum: [persistent, non-persistent, unknown]
+        nullable: true
+        description: |
+          Repository type identified in reasoning (FR-006).
+          - persistent: Zenodo, Figshare, Dryad (unique identifier, long-term preservation)
+          - non-persistent: GitHub, personal websites
+          - unknown: No repository mentioned or unclear
+
+# ============================================================================
+# ENHANCED PROMPT STRUCTURE (FR-007)
+# ============================================================================
+
+prompt_structure:
+  description: |
+    Enhanced prompt template with explicit reasoning steps to ensure
+    the LLM considers completeness attributes, access barriers, and
+    repository type in classification decisions.
+
+  system_prompt:
+    description: Base taxonomy definitions (existing, enhanced with refined rules)
+    content: |
+      You are an expert research analyst specializing in evaluating data and code
+      availability statements in scholarly publications. Your task is to classify
+      the openness of availability statements using a refined 4-category taxonomy.
+
+      Classification Categories (from most open to least open):
+
+      1. **open**: Fully accessible with no restrictions
+         - Data/code in public repository (Zenodo, Figshare, GitHub public)
+         - No registration, login, or approval required
+         - Open license (CC-BY, MIT, etc.)
+
+      2. **mostly_open**: Largely accessible with minor restrictions
+         - High completeness (most/all data or code types available)
+         - Minor barriers only: free registration, institutional access
+         - May use non-persistent repository (GitHub) if comprehensive
+
+      3. **mostly_closed**: Largely restricted with limited access
+         - Low/partial completeness (only some data/code types available)
+         - Substantial barriers: data use agreements, confidentiality, proprietary
+         - Limited availability even if some materials provided
+
+      4. **closed**: Not accessible
+         - "Available upon request" (ALWAYS closed regardless of politeness)
+         - Confidential, proprietary, or restricted
+         - No statement provided
+
+  classification_template:
+    description: Step-by-step reasoning template (FR-007)
+    required_steps:
+      - step: 1
+        instruction: "Identify data/code types mentioned (completeness assessment)"
+        data_types:
+          - Raw data
+          - Results data
+          - Source Data
+          - Processed data
+          - All data
+        code_types:
+          - Download scripts
+          - Processing scripts
+          - Analysis code
+          - Figure generation code
+          - Models
+          - All code
+
+      - step: 2
+        instruction: "Identify access barriers"
+        minor_barriers:
+          - Free registration
+          - Institutional access (freely available to affiliated researchers)
+          - Citation requirement
+        substantial_barriers:
+          - Data use agreement
+          - Confidentiality restrictions
+          - Proprietary terms
+          - "Available upon request"
+          - Author approval required
+
+      - step: 3
+        instruction: "Determine repository type (if mentioned)"
+        persistent_repositories:
+          - Zenodo
+          - Figshare
+          - Dryad
+          - Dataverse
+          - domain-specific archives with DOI
+        non_persistent_repositories:
+          - GitHub
+          - GitLab
+          - Personal websites
+          - Lab websites
+
+      - step: 4
+        instruction: "Apply hard precedence rule (FR-004)"
+        rule: |
+          IF substantial barriers exist (data use agreement, proprietary, confidential)
+          THEN classify as mostly_closed
+          REGARDLESS of completeness or repository quality
+
+      - step: 5
+        instruction: "Assess completeness for mostly_open vs mostly_closed (if no substantial barriers)"
+        mostly_open_data_completeness:
+          - "All"
+          - "Raw; Results; Source Data"
+          - "Raw; Results"
+        mostly_open_code_completeness:
+          - "All"
+          - "Download; Process; Analysis; Figures"
+          - "Processing; Generate Results"
+          - "Processing; Results"
+          - "Models; Results"
+          - "Models; Analysis"
+          - "Analysis; Figures"
+          - "Model; Figures"
+          - "Results; Figures"
+          - "Generate Results; Figures"
+
+        decision_logic: |
+          IF high completeness AND (persistent repository OR comprehensive non-persistent)
+          THEN mostly_open
+
+          IF low/partial completeness OR unclear completeness
+          THEN mostly_closed
+
+# ============================================================================
+# VALIDATION REQUIREMENTS
+# ============================================================================
+
+validation_requirements:
+  FR-008:
+    requirement: "System MUST provide reasoning that explains which completeness attributes and barriers influenced the classification decision"
+    validation_method: "Extract completeness_attributes_mentioned and access_barriers_mentioned from reasoning text"
+    success_criteria: "For mostly_open/mostly_closed classifications, reasoning explicitly mentions completeness attributes"
+
+  SC-004:
+    requirement: "90% of classification reasoning outputs explicitly mention completeness attributes when classifying statements in the 'mostly_open' or 'mostly_closed' categories"
+    validation_method: "Text analysis to detect completeness keywords (Raw, Results, All, Processing, Analysis, etc.) in reasoning field"
+    target: 0.90
+
+# ============================================================================
+# RETRY AND FAILURE HANDLING (FR-010)
+# ============================================================================
+
+error_handling:
+  retry_policy:
+    max_attempts: 3
+    backoff_strategy: exponential
+    initial_delay_seconds: 1.0
+    backoff_multiplier: 2.0
+    retryable_errors:
+      - API timeout
+      - Rate limit exceeded
+      - Service unavailable (503, 504, 529)
+      - Malformed response (parseable after retry)
+
+  failure_response:
+    status: unclassified
+    category: null
+    confidence: 0.0
+    reasoning: "Classification failed after 3 retry attempts: {error_reason}"
+    error_logged: true
+    continue_batch_processing: true
+
+# ============================================================================
+# EXAMPLES
+# ============================================================================
+
+examples:
+  - name: "High completeness with minor barrier → mostly_open"
+    request:
+      statement: "All raw data, processed results, and source data files are available at https://zenodo.org/record/12345 (free registration required)."
+      statement_type: data
+    expected_response:
+      category: mostly_open
+      confidence: 0.90
+      reasoning: |
+        1. Data types: All raw data, processed results, source data (high completeness - all necessary types)
+        2. Access barrier: Free registration (minor barrier)
+        3. Repository: Zenodo (persistent repository with DOI)
+        4. No substantial barriers present
+        5. Decision: High completeness + minor barrier + persistent repository → mostly_open
+      completeness_attributes_mentioned: ["raw data", "processed results", "source data", "all"]
+      access_barriers_mentioned: ["free registration"]
+      repository_type: persistent
+
+  - name: "Substantial barrier overrides completeness → mostly_closed (FR-004)"
+    request:
+      statement: "All data available via data use agreement from the consortium."
+      statement_type: data
+    expected_response:
+      category: mostly_closed
+      confidence: 0.95
+      reasoning: |
+        1. Data types: "All data" mentioned (suggests high completeness)
+        2. Access barrier: Data use agreement (SUBSTANTIAL barrier)
+        3. Hard precedence rule: Substantial barrier always takes precedence
+        4. Decision: Data use agreement → mostly_closed (regardless of completeness)
+      completeness_attributes_mentioned: ["all data"]
+      access_barriers_mentioned: ["data use agreement"]
+      repository_type: unknown
+
+  - name: "Partial code availability → mostly_closed"
+    request:
+      statement: "Processing scripts are included in the supplementary materials."
+      statement_type: code
+    expected_response:
+      category: mostly_closed
+      confidence: 0.75
+      reasoning: |
+        1. Code types: Processing scripts only (partial completeness - missing download, analysis, figures)
+        2. Access barrier: Supplementary materials (minor barrier - free with article)
+        3. Repository: Journal supplementary (varies by publisher)
+        4. Decision: Partial code availability → mostly_closed
+      completeness_attributes_mentioned: ["processing scripts"]
+      access_barriers_mentioned: []
+      repository_type: non-persistent
+
+  - name: "GitHub with all code → mostly_open (completeness outweighs non-persistent repo)"
+    request:
+      statement: "All code (data download, processing, analysis, and figure generation) available at https://github.com/author/repo under MIT license."
+      statement_type: code
+    expected_response:
+      category: mostly_open
+      confidence: 0.85
+      reasoning: |
+        1. Code types: All code types mentioned - download, processing, analysis, figure generation (high completeness)
+        2. Access barrier: None (public GitHub, open license)
+        3. Repository: GitHub (non-persistent, but comprehensive)
+        4. Decision: High completeness + no barriers → mostly_open (completeness outweighs repository type per FR-006)
+      completeness_attributes_mentioned: ["all code", "download", "processing", "analysis", "figure generation"]
+      access_barriers_mentioned: []
+      repository_type: non-persistent
+
+  - name: "Ambiguous completeness → default mostly_closed"
+    request:
+      statement: "Some data available at the project website."
+      statement_type: data
+    expected_response:
+      category: mostly_closed
+      confidence: 0.60
+      reasoning: |
+        1. Data types: "Some data" (unclear completeness - ambiguous)
+        2. Access barrier: Project website (varies - potentially unstable)
+        3. Repository: Project website (non-persistent)
+        4. Decision: Unclear completeness defaults to mostly_closed
+      completeness_attributes_mentioned: []
+      access_barriers_mentioned: []
+      repository_type: non-persistent
+
+# ============================================================================
+# PERFORMANCE REQUIREMENTS
+# ============================================================================
+
+performance:
+  target_latency:
+    single_classification: "5-10 seconds"
+    batch_300_publications: "25-50 minutes"
+
+  context_window:
+    system_prompt_tokens: ~800
+    few_shot_examples_tokens: ~1500  # 5 examples × ~300 tokens
+    classification_template_tokens: ~300
+    total_input_tokens: ~2600
+    max_response_tokens: 500
+    total_tokens_per_request: ~3100
